@@ -4,16 +4,18 @@
   var call = window.Bitflow.call;
   var rows = new Map();
   var samples = new Map();
+  var hashes = new Map();
   var view = {
+    screen: 'tasks',
     filter: 'all',
     paused: false,
     info: {},
+    settings: null,
     counts: { all: 0, active: 0, completed: 0, failed: 0 },
-    lastPath: ''
+    logLines: 0
   };
 
   var listEl = document.getElementById('list');
-  var emptyEl = document.getElementById('empty');
   var tpl = document.getElementById('row-template');
   var toastEl = document.getElementById('toast');
   var dialog = document.getElementById('add-dialog');
@@ -21,6 +23,9 @@
   var errEl = document.getElementById('dialog-error');
   var btnPause = document.getElementById('btn-pause');
   var btnResume = document.getElementById('btn-resume');
+  var logListEl = document.getElementById('log-list');
+  var probeEl = document.getElementById('probe-result');
+  var hintEl = document.getElementById('settings-hint');
 
   var STATE_TEXT = {
     queued: '排队中',
@@ -68,6 +73,10 @@
     return '…' + text.slice(text.length - 70);
   }
 
+  function isZip(path) {
+    return /\.zip$/i.test(String(path || ''));
+  }
+
   function showToast(message) {
     toastEl.textContent = message;
     toastEl.hidden = false;
@@ -89,7 +98,7 @@
     if (prev && now > prev.t && item.done >= prev.done) {
       speed = ((item.done - prev.done) * 1000) / (now - prev.t);
     }
-    if (item.state === 'completed' || item.state === 'failed' || item.state === 'cancelled') speed = 0;
+    if (item.state !== 'downloading' && item.state !== 'verifying') speed = 0;
     var smoothed = prev ? prev.speed * 0.7 + speed * 0.3 : speed;
     if (!prev || Math.abs(smoothed - speed) < 4096) smoothed = speed;
     samples.set(item.id, { done: item.done, t: now, speed: smoothed });
@@ -124,8 +133,13 @@
     });
 
     el.querySelector('.act-open').addEventListener('click', function () {
-      var path = el.dataset.path || '';
-      call('shell.reveal', { path: path }).catch(function (error) {
+      call('shell.reveal', { path: el.dataset.path || '' }).catch(function (error) {
+        showToast(error.message);
+      });
+    });
+
+    el.querySelector('.act-extract').addEventListener('click', function () {
+      call('task.extract', { task: item.id }).catch(function (error) {
         showToast(error.message);
       });
     });
@@ -133,6 +147,18 @@
     listEl.appendChild(el);
     rows.set(item.id, el);
     return el;
+  }
+
+  function applyHash(el, id) {
+    var chip = el.querySelector('.hash-chip');
+    var info = hashes.get(id);
+    if (!info || !info.hex) {
+      chip.hidden = true;
+      return;
+    }
+    chip.hidden = false;
+    chip.textContent = info.algo + ' ' + info.hex.slice(0, 12) + '…';
+    chip.title = info.algo.toUpperCase() + ': ' + info.hex;
   }
 
   function updateRow(item, now, solo) {
@@ -164,11 +190,14 @@
     var badge = el.querySelector('.cell-state .badge');
     badge.textContent = STATE_TEXT[item.state] || item.state;
 
-    var canOpen = item.state === 'completed';
-    el.querySelector('.act-open').hidden = !canOpen;
+    var completed = item.state === 'completed';
+    el.querySelector('.act-open').hidden = !completed;
+    el.querySelector('.act-extract').hidden = !(completed && isZip(item.path));
     el.querySelector('.act-cancel').hidden = !(item.state === 'queued' || item.state === 'downloading' || item.state === 'verifying');
 
-    el.hidden = !matches(item);
+    applyHash(el, item.id);
+
+    el.hidden = view.screen !== 'tasks' || !matches(item);
   }
 
   function refreshNav() {
@@ -176,8 +205,80 @@
       node.textContent = String(view.counts[node.dataset.count] || 0);
     });
     document.querySelectorAll('.nav-item').forEach(function (node) {
-      node.classList.toggle('is-active', node.dataset.filter === view.filter);
+      var active;
+      if (view.screen === 'tasks') {
+        active = node.dataset.view === 'tasks' && (node.dataset.filter || 'all') === view.filter;
+      } else {
+        active = node.dataset.view === view.screen;
+      }
+      node.classList.toggle('is-active', active);
     });
+  }
+
+  function appendLogs(records) {
+    if (!records || !records.length) return;
+    var nearBottom = logListEl.scrollTop + logListEl.clientHeight >= logListEl.scrollHeight - 24;
+    var empty = logListEl.querySelector('.log-empty');
+    if (empty) empty.remove();
+
+    records.forEach(function (rec) {
+      var row = document.createElement('div');
+      row.className = 'log-line';
+      row.dataset.level = rec.level || 'info';
+
+      var time = document.createElement('span');
+      time.className = 'log-time';
+      var date = new Date(rec.time || Date.now());
+      time.textContent = String(date.getHours()).padStart(2, '0') + ':' +
+        String(date.getMinutes()).padStart(2, '0') + ':' +
+        String(date.getSeconds()).padStart(2, '0');
+
+      var level = document.createElement('span');
+      level.className = 'log-level';
+      level.textContent = String(rec.level || 'info').slice(0, 5);
+
+      var text = document.createElement('span');
+      text.className = 'log-text';
+      text.textContent = rec.text || '';
+
+      row.appendChild(time);
+      row.appendChild(level);
+      row.appendChild(text);
+      logListEl.appendChild(row);
+    });
+
+    view.logLines += records.length;
+    while (logListEl.children.length > 800) logListEl.removeChild(logListEl.firstChild);
+    document.getElementById('log-count').textContent = view.logLines + ' 条';
+    if (nearBottom) logListEl.scrollTop = logListEl.scrollHeight;
+  }
+
+  function handleAsync(msg) {
+    if (msg.type === 'verify') {
+      hashes.set(msg.task, { algo: msg.algo || 'sha256', hex: msg.hex || '', ok: msg.ok });
+      var el = rows.get(msg.task);
+      if (el) applyHash(el, msg.task);
+      return;
+    }
+    if (msg.type === 'extract') {
+      if (msg.ok) {
+        showToast('解压完成：' + String(msg.dest || '').split(/[\\/]/).pop() + '（' + (msg.files || 0) + ' 个文件）');
+      } else {
+        showToast('解压失败：' + (msg.error || '未知错误'));
+      }
+      return;
+    }
+    if (msg.type === 'probe') {
+      var speed = msg.speed ? (msg.speed / 1048576).toFixed(2) + ' MB/s' : '—';
+      if (msg.ok && msg.partial) {
+        probeEl.textContent = '已收 ' + fmtBytes(msg.received) + ' · ' + speed +
+          '（15 秒内未读完，按已收字节估算）';
+      } else {
+        probeEl.textContent = msg.ok
+          ? 'HTTP ' + Math.round(msg.status) + ' · ' + Math.round(msg.ms) + ' ms · ' + speed + ' · ' + fmtBytes(msg.received)
+          : '失败：' + (msg.error || ('HTTP ' + Math.round(msg.status)));
+      }
+    }
   }
 
   function renderTick(msg) {
@@ -196,7 +297,6 @@
       if (ACTIVE_STATES.indexOf(item.state) !== -1) view.counts.active++;
       if (item.state === 'completed') view.counts.completed++;
       if (item.state === 'failed' || item.state === 'cancelled') view.counts.failed++;
-      if (item.path) view.lastPath = item.path;
     });
 
     if (view.counts.active === 1) solo = progress;
@@ -236,6 +336,9 @@
       });
     }
 
+    if (msg.logs) appendLogs(msg.logs);
+    if (msg.async) msg.async.forEach(handleAsync);
+
     refreshNav();
   }
 
@@ -250,6 +353,16 @@
         (filter === 'failed' && (state === 'failed' || state === 'cancelled'));
       el.hidden = !keep;
     });
+    refreshNav();
+  }
+
+  function setScreen(screen) {
+    view.screen = screen;
+    document.querySelectorAll('.view').forEach(function (node) {
+      node.hidden = node.dataset.view !== screen;
+    });
+    if (screen === 'settings') loadSettings();
+    if (screen === 'logs') logListEl.scrollTop = logListEl.scrollHeight;
     refreshNav();
   }
 
@@ -274,7 +387,7 @@
     } catch (e) {
       /* 非法 URL，保留默认名 */
     }
-    var dir = view.info.downloads || '';
+    var dir = (view.settings && view.settings.downloadDir) || view.info.downloads || '';
     path.value = dir ? dir + '\\' + name : name;
   }
 
@@ -311,6 +424,7 @@
     call('dl.add', payload)
       .then(function () {
         dialog.close();
+        setScreen('tasks');
         setFilter('all');
       })
       .catch(function (error) {
@@ -330,6 +444,76 @@
       })
       .catch(function (error) {
         showToast(error.message);
+      });
+  }
+
+  function fillSettings(s) {
+    document.getElementById('s-downloadDir').value = s.downloadDir || '';
+    document.getElementById('s-smallThreads').value = s.smallThreads;
+    document.getElementById('s-largeThreads').value = s.largeThreads;
+    document.getElementById('s-maxConnections').value = s.maxConnections;
+    document.getElementById('s-speedLimitKb').value = s.speedLimitKb;
+    document.getElementById('s-logLevel').value = s.logLevel || 'debug';
+    document.getElementById('s-autoExtract').checked = !!s.autoExtract;
+    document.getElementById('s-probeUrl').value = s.probeUrl || '';
+    document.getElementById('about-installId').textContent = s.installId || '—';
+    document.getElementById('about-logDir').textContent = s.logDir || '—';
+    document.getElementById('about-settingsPath').textContent = s.settingsPath || '—';
+  }
+
+  function loadSettings() {
+    call('settings.get')
+      .then(function (s) {
+        view.settings = s;
+        fillSettings(s);
+      })
+      .catch(function (error) {
+        showToast(error.message);
+      });
+  }
+
+  function numField(id, fallback) {
+    var raw = document.getElementById(id).value.replace(/[^0-9]/g, '');
+    if (!raw) return fallback;
+    return Number(raw);
+  }
+
+  function saveSettings() {
+    if (!view.settings) {
+      showToast('设置尚未加载');
+      return;
+    }
+    var payload = {
+      downloadDir: document.getElementById('s-downloadDir').value.trim(),
+      smallThreads: numField('s-smallThreads', 16),
+      largeThreads: numField('s-largeThreads', 4),
+      maxConnections: numField('s-maxConnections', 48),
+      speedLimitKb: numField('s-speedLimitKb', 0),
+      logLevel: document.getElementById('s-logLevel').value,
+      autoExtract: document.getElementById('s-autoExtract').checked,
+      probeUrl: document.getElementById('s-probeUrl').value.trim()
+    };
+
+    call('settings.set', payload)
+      .then(function (res) {
+        view.settings = Object.assign({}, view.settings, payload);
+        hintEl.hidden = false;
+        hintEl.textContent = res && res.restartRequired
+          ? '已保存。引擎参数（线程 / 连接数 / 限速）需要重启 BitFlow 后生效。'
+          : '已保存到 settings.json。';
+        showToast('设置已保存');
+      })
+      .catch(function (error) {
+        showToast(error.message);
+      });
+  }
+
+  function runProbe() {
+    probeEl.textContent = '正在测速…';
+    var url = document.getElementById('s-probeUrl').value.trim();
+    call('net.probe', url ? { url: url } : {})
+      .catch(function (error) {
+        probeEl.textContent = '失败：' + error.message;
       });
   }
 
@@ -357,9 +541,25 @@
 
     document.querySelectorAll('.nav-item').forEach(function (node) {
       node.addEventListener('click', function () {
-        setFilter(node.dataset.filter);
+        if (node.dataset.view === 'tasks' && node.dataset.filter) setFilter(node.dataset.filter);
+        setScreen(node.dataset.view || 'tasks');
       });
     });
+
+    document.getElementById('btn-clear-log').addEventListener('click', function () {
+      logListEl.innerHTML = '<div class="log-empty">视图已清空，新日志会继续追加。</div>';
+      view.logLines = 0;
+      document.getElementById('log-count').textContent = '0 条';
+    });
+
+    document.getElementById('btn-open-logdir').addEventListener('click', function () {
+      call('log.revealDir').catch(function (error) {
+        showToast(error.message);
+      });
+    });
+
+    document.getElementById('btn-save-settings').addEventListener('click', saveSettings);
+    document.getElementById('btn-probe').addEventListener('click', runProbe);
 
     form.addEventListener('submit', submitForm);
     document.getElementById('f-url').addEventListener('input', suggestPath);
@@ -390,10 +590,14 @@
         document.documentElement.dataset.theme = info.theme || 'light';
         document.getElementById('stat-version').textContent = 'BitFlow ' + (info.version || '');
         document.getElementById('engine-label').textContent = (info.engine || 'XGDL') + ' 引擎';
+        document.getElementById('about-version').textContent = 'BitFlow ' + (info.version || '');
+        document.getElementById('about-engine').textContent = (info.engine || 'XGDL');
       })
       .catch(function (error) {
         showToast(error.message);
       });
+
+    loadSettings();
   }
 
   if (document.readyState === 'loading') {

@@ -11,6 +11,7 @@ endif()
 
 set(XGDL_BUILD_DEMO OFF CACHE BOOL "" FORCE)
 add_subdirectory(vendor/xgdl)
+add_subdirectory(vendor/core)
 
 include(cmake/embed_web_assets.cmake)
 bitflow_embed_assets("${CMAKE_CURRENT_SOURCE_DIR}/web" "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -18,7 +19,9 @@ bitflow_embed_assets("${CMAKE_CURRENT_SOURCE_DIR}/web" "${CMAKE_CURRENT_BINARY_D
 add_executable(Bitflow WIN32
     src/main.cpp
     src/bridge.cpp
+    src/settings.cpp
     src/bridge.h
+    src/settings.h
     src/json.h
     src/text.h
     ${BF_WEB_RC}
@@ -33,6 +36,14 @@ target_include_directories(Bitflow PRIVATE
 target_link_libraries(Bitflow PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/vendor/webview2/lib/x64/WebView2LoaderStatic.lib"
     XGDL::xgdl
+    XGCFG::xgcfg
+    XGCRYPTO::xgcrypto
+    XGFS::xgfs
+    XGLOG::xglog
+    XGNET::xgnet
+    XGPROC::xgproc
+    XGSECURE::xgsecure
+    XGZIP::xgzip
     dwmapi shell32 shlwapi ole32 oleaut32 user32 advapi32
 )
 

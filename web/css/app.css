@@ -186,6 +186,216 @@ textarea {
   background: var(--color-app-surface);
 }
 
+.view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.view[hidden] {
+  display: none;
+}
+
+.view-title {
+  margin: 0;
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-400);
+  font-weight: var(--font-weight-semibold);
+}
+
+.view-sub {
+  font-size: var(--font-size-200);
+  color: var(--color-neutral-foreground-3);
+}
+
+.nav-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--color-neutral-stroke-3);
+}
+
+.hash-chip {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: var(--border-radius-small);
+  background: var(--color-neutral-background-3);
+  color: var(--color-neutral-foreground-3);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-100);
+  cursor: default;
+}
+
+.log-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 16px 16px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 18px;
+  user-select: text;
+}
+
+.log-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.log-list::-webkit-scrollbar-thumb {
+  background: var(--color-neutral-background-5);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: var(--border-radius-circular);
+}
+
+.log-line {
+  display: grid;
+  grid-template-columns: 68px 58px minmax(0, 1fr);
+  gap: 10px;
+  padding: 2px 6px;
+  border-radius: var(--border-radius-small);
+  color: var(--color-neutral-foreground-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-line:hover {
+  background: var(--color-neutral-background-3);
+}
+
+.log-time {
+  color: var(--color-neutral-foreground-4);
+  font-variant-numeric: tabular-nums;
+}
+
+.log-level {
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  font-size: 10px;
+  line-height: 18px;
+  color: var(--color-neutral-foreground-3);
+}
+
+.log-line[data-level="warn"] .log-level {
+  color: var(--color-palette-yellow-foreground-1);
+}
+
+.log-line[data-level="error"] .log-level,
+.log-line[data-level="fatal"] .log-level {
+  color: var(--color-palette-red-foreground-1);
+}
+
+.log-line[data-level="info"] .log-level {
+  color: var(--color-brand-foreground-1);
+}
+
+.log-empty {
+  padding: 24px 6px;
+  color: var(--color-neutral-foreground-3);
+}
+
+.settings-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.settings-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.settings-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-neutral-background-5);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: var(--border-radius-circular);
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+  padding-bottom: 24px;
+}
+
+.card {
+  margin: 0;
+  padding: 14px 18px 16px;
+  border: 1px solid var(--color-neutral-stroke-2);
+  border-radius: var(--border-radius-xlarge);
+  background: var(--color-neutral-background-1);
+}
+
+.card legend {
+  padding: 0 6px;
+  font-size: var(--font-size-200);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-neutral-foreground-2);
+}
+
+.card .field + .field,
+.card .field-row + .field,
+.card .field + .field-row,
+.card .field-row + .field-row,
+.card .check,
+.card .probe-result {
+  margin-top: 12px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-neutral-foreground-2);
+  cursor: pointer;
+}
+
+.check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-brand-background);
+}
+
+.probe-result {
+  padding: 8px 10px;
+  border-radius: var(--border-radius-medium);
+  background: var(--color-neutral-background-3);
+  color: var(--color-neutral-foreground-3);
+  font-size: var(--font-size-200);
+  font-variant-numeric: tabular-nums;
+}
+
+.about-grid {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+  font-size: var(--font-size-200);
+  user-select: text;
+}
+
+.about-grid dt {
+  color: var(--color-neutral-foreground-3);
+}
+
+.about-grid dd {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  color: var(--color-neutral-foreground-1);
+  word-break: break-all;
+}
+
+.settings-hint {
+  padding: 8px 10px;
+  border-radius: var(--border-radius-medium);
+  background: var(--color-brand-background-subtle);
+  color: var(--color-brand-foreground-1);
+  font-size: var(--font-size-200);
+}
+
 .commandbar {
   display: flex;
   align-items: center;

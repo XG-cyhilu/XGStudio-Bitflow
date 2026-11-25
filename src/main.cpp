@@ -12,7 +12,10 @@
 #include <memory>
 #include <string>
 
+#include <xglog/xglog.h>
+
 #include "bridge.h"
+#include "settings.h"
 #include "text.h"
 #include "WebAssets.generated.h"
 
@@ -354,6 +357,20 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     g_hinst = hinst;
     g_dark = SystemUsesDarkTheme();
 
+    SettingsStore settings;
+    settings.Load();
+
+    xglog::Config logCfg;
+    logCfg.dir = LogDir();
+    logCfg.baseName = L"bitflow";
+    logCfg.level = ParseLogLevelName(settings.Get().logLevel);
+    logCfg.fileLevel = xglog::Level::Debug;
+    logCfg.console = false;
+    logCfg.debugger = true;
+    logCfg.file = true;
+    xglog::Init(logCfg);
+    XGLOG_INFO("BitFlow starting, settings=%s", WToU8(SettingsPath()).c_str());
+
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -389,7 +406,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         [](const std::string& json) {
             if (g_web) g_web->PostWebMessageAsJson(U8ToW(json).c_str());
         },
-        []() { return g_dark; });
+        []() { return g_dark; },
+        &settings);
     g_bridge->Start();
 
     SetTimer(g_hwnd, 1, 200, nullptr);
@@ -408,6 +426,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         g_bridge->Shutdown();
         g_bridge.reset();
     }
+    xglog::Shutdown();
     CoUninitialize();
     return 0;
 }
