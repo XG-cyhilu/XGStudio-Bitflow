@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <cstdlib>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -38,6 +39,17 @@ struct AsyncBus {
 
     std::mutex mu;
     std::vector<std::string> items;
+};
+
+struct PendingAdds {
+    struct Item {
+        std::wstring url;
+        std::wstring path;
+        xgdl::TaskOptions opt;
+        bool ready = false;      // 大小探完了才让 Tick 入队（否则会先按"未知大小"走单流）
+    };
+    std::mutex mu;
+    std::deque<Item> items;
 };
 
 namespace {
@@ -118,6 +130,53 @@ void WriteTask(jsn::Writer& w, const xgdl::TaskInfo& ti) {
     w.EndObject();
 }
 
+// 大小未知时先探一次真实长度：XGDL 只有在入队时就知道 expect 才会走分块，
+// 而且声明的大小和服务器对不上会一路 416。
+uint64_t DiscoverSize(const std::wstring& url,
+                      const std::vector<std::pair<std::wstring, std::wstring>>& headers) {
+    if (url.empty()) return 0;
+    xgnet::Request req;
+    req.url = WToU8(url);
+    req.method = "HEAD";
+    req.userAgent = "XGDL/1.0 (Windows)";
+    req.connectTimeoutMs = 6000;
+    req.timeoutMs = 12000;
+    for (auto& h : headers) req.headers.emplace_back(WToU8(h.first), WToU8(h.second));
+
+    xgnet::Client client;
+    xgnet::Response res;
+    if (client.Perform(req, res) && res.IsSuccess()) {
+        std::string v;
+        if (res.Header("Content-Length", v) && !v.empty()) {
+            uint64_t n = std::strtoull(v.c_str(), nullptr, 10);
+            if (n > 0) return n;
+        }
+    }
+
+    // 有些 CDN 不给 HEAD 或者不给长度，改用 Range:0-0，从 Content-Range 的 "/总长" 里取
+    xgnet::Request r2 = req;
+    r2.method = "GET";
+    r2.timeoutMs = 15000;
+    r2.headers.emplace_back("Range", "bytes=0-0");
+    xgnet::Response res2;
+    if (client.Perform(r2, res2)) {
+        std::string cr;
+        if (res2.Header("Content-Range", cr)) {
+            size_t slash = cr.find('/');
+            if (slash != std::string::npos) {
+                uint64_t n = std::strtoull(cr.c_str() + slash + 1, nullptr, 10);
+                if (n > 0) return n;
+            }
+        }
+        std::string v;
+        if (res2.Header("Content-Length", v) && !v.empty()) {
+            uint64_t n = std::strtoull(v.c_str(), nullptr, 10);
+            if (n > 0) return n;
+        }
+    }
+    return 0;
+}
+
 void WriteSettings(jsn::Writer& d, const Settings& s) {
     d.Key("downloadDir").Str(s.downloadDir);
     d.Key("smallThreads").Num(s.smallThreads);
@@ -137,7 +196,8 @@ Bridge::Bridge(Sink sink, ThemeQuery theme, SettingsStore* settings)
     : sink_(std::move(sink)),
       theme_(std::move(theme)),
       settings_(settings),
-      bus_(std::make_shared<AsyncBus>()) {
+      bus_(std::make_shared<AsyncBus>()),
+      pendingAdds_(std::make_shared<PendingAdds>()) {
     xgdl::Config cfg;
     cfg.chunkSize = 512ull << 10;          // 分块粒度 512 KB
     cfg.maxHostConnections = 128;          // 允许 128 个分块同时在飞
@@ -177,6 +237,15 @@ std::wstring Bridge::PathOf(uint32_t id) const {
     return std::wstring();
 }
 
+uint32_t Bridge::EnqueueAdd(const std::wstring& url, const std::wstring& path, xgdl::TaskOptions& opt) {
+    uint32_t id = mgr_->Add(url, path, opt);
+    if (id == 0) return 0;
+    order_.push_back(id);
+    paths_[id] = path;
+    XGLOG_INFO("task %u queued (%llu bytes)", id, (unsigned long long)opt.expectBytes);
+    return id;
+}
+
 void Bridge::Tick() {
     if (!started_ || !sink_) return;
 
@@ -184,6 +253,30 @@ void Bridge::Tick() {
     if (++flushTick >= 25) {
         flushTick = 0;
         xglog::Flush();
+    }
+
+    // 后台探测完大小的任务在这里真正入队（只在 UI 线程动 mgr_/order_/paths_）
+    {
+        std::deque<PendingAdds::Item> ready;
+        {
+            std::lock_guard<std::mutex> lk(pendingAdds_->mu);
+            while (!pendingAdds_->items.empty() && pendingAdds_->items.front().ready) {
+                ready.push_back(std::move(pendingAdds_->items.front()));
+                pendingAdds_->items.pop_front();
+            }
+        }
+        for (auto& it : ready) {
+            uint32_t id = EnqueueAdd(it.url, it.path, it.opt);
+            jsn::Writer a;
+            a.BeginObject();
+            a.Key("type").Str("added");
+            a.Key("task").U64(id);
+            a.Key("size").U64(it.opt.expectBytes);
+            a.Key("ok").Bool(id != 0);
+            a.Key("error").Str(id == 0 ? "入队失败：路径已在队列中，或参数非法" : "");
+            a.EndObject();
+            bus_->Push(a.Str());
+        }
     }
 
     jsn::Writer w;
@@ -482,13 +575,60 @@ std::string Bridge::Handle(const std::string& payload) {
             }
         }
 
-        uint32_t id = mgr_->Add(U8ToW(url), wpath, opt);
+        if (opt.expectBytes == 0) {
+            // 大小留空：先挂到待办，后台 HEAD 探一个真实长度，再在 Tick 里入队。
+            // 这样大文件能自动走分块，也不会因为大小瞎猜而 416。
+            {
+                PendingAdds::Item item;
+                item.url = U8ToW(url);
+                item.path = wpath;
+                item.opt = opt;
+                std::lock_guard<std::mutex> lk(pendingAdds_->mu);
+                pendingAdds_->items.push_back(std::move(item));
+            }
+
+            std::shared_ptr<PendingAdds> pending = pendingAdds_;
+            std::shared_ptr<AsyncBus> bus = bus_;
+            std::wstring wurl = U8ToW(url);
+            std::vector<std::pair<std::wstring, std::wstring>> hdrs = opt.headers;
+            std::thread([wurl, wpath, pending, bus, hdrs]() {
+                uint64_t size = DiscoverSize(wurl, hdrs);
+                {
+                    std::lock_guard<std::mutex> lk(pending->mu);
+                    for (auto& it : pending->items) {
+                        if (it.url == wurl && it.path == wpath && !it.ready) {
+                            it.opt.expectBytes = size;
+                            it.ready = true;
+                            break;
+                        }
+                    }
+                }
+                if (size > 0) {
+                    XGLOG_INFO("size probe: %llu bytes for %s", (unsigned long long)size, WToU8(wurl).c_str());
+                } else {
+                    XGLOG_WARN("size probe failed, size stays unknown: %s", WToU8(wurl).c_str());
+                }
+                jsn::Writer w;
+                w.BeginObject();
+                w.Key("type").Str("size");
+                w.Key("url").Str(WToU8(wurl));
+                w.Key("size").U64(size);
+                w.EndObject();
+                bus->Push(w.Str());
+            }).detach();
+
+            jsn::Writer d;
+            d.BeginObject();
+            d.Key("queued").Bool(true);
+            d.Key("probing").Bool(true);
+            d.EndObject();
+            return MakeReply(rid, true, d.Str(), "");
+        }
+
+        uint32_t id = EnqueueAdd(U8ToW(url), wpath, opt);
         if (id == 0) {
             return MakeReply(rid, false, "", "入队失败：路径已在队列中，或参数非法");
         }
-        order_.push_back(id);
-        paths_[id] = wpath;
-        XGLOG_INFO("task %u queued: %s", id, path.c_str());
 
         jsn::Writer d;
         d.BeginObject();

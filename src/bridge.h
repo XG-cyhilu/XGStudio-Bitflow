@@ -4,8 +4,10 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -14,6 +16,7 @@
 
 class SettingsStore;
 struct AsyncBus;
+struct PendingAdds;
 
 class Bridge {
 public:
@@ -33,6 +36,7 @@ private:
     void StartExtract(uint32_t id, const std::wstring& path);
     void StartProbe(const std::string& url);
     std::wstring PathOf(uint32_t id) const;
+    uint32_t EnqueueAdd(const std::wstring& url, const std::wstring& path, xgdl::TaskOptions& opt);
 
     Sink sink_;
     ThemeQuery theme_;
@@ -41,6 +45,7 @@ private:
     std::vector<uint32_t> order_;
     std::unordered_map<uint32_t, std::wstring> paths_;
     std::shared_ptr<AsyncBus> bus_;
+    std::shared_ptr<PendingAdds> pendingAdds_;
     bool started_ = false;
     bool paused_ = false;
     bool clientSeen_ = false;

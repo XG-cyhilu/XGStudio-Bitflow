@@ -1,4 +1,4 @@
-﻿// Copyright 2026 XGstudio
+// Copyright 2026 XGstudio
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -57,6 +57,8 @@ struct Entry {
 
     std::atomic<bool> cancel{ false };
     std::atomic<bool> rangeUnsupported{ false };
+    // 分块中途改单流只做一次：128 个块同时 416/200 时不能各自 CancelSiblings + Requeue
+    std::atomic<bool> fallbackStarted{ false };
     std::atomic<uint64_t> finished{ 0 };   // 已完成分块的字节数
     std::atomic<int> pending{ 0 };         // 未完成的分块数
     std::mutex mu;                          // 终态切换互斥，防止并发重复计重试
@@ -170,6 +172,7 @@ struct Manager::Impl {
 
     void Plan(const EntryPtr& e) {
         if (e->cancel.load()) { FinishCancelled(e); return; }
+        e->fallbackStarted.store(false);
         bool chunkable = (e->expect > cfg.largeThreshold) && !e->rangeUnsupported.load();
         if (!chunkable) {
             e->large = false;
@@ -307,6 +310,13 @@ struct Manager::Impl {
             return;
         }
 
+        // 断点续传的起点被服务器判为越界（.part 比真实文件还长）：丢掉残件从头下
+        if (!job->ok && job->httpStatus == 416 && resumeFrom > 0) {
+            CleanupFile(part);
+            RequeueSingle(e);
+            return;
+        }
+
         if (!job->ok) { Fail(e, job->httpStatus, detail::Widen(job->error)); return; }
         if (sink->failed) { CleanupFile(part); Fail(e, job->httpStatus, L"disk write failed"); return; }
 
@@ -359,16 +369,35 @@ struct Manager::Impl {
         if (e->cancel.load()) { CleanupFile(part); FinishCancelled(e); return; }
 
         if (job->ok && w.chunk > 0 && job->httpStatus == 200) {
-            // 服务器忽略了 Range，回退到单流下载
-            e->rangeUnsupported.store(true);
+            // 服务器忽略了 Range，回退到单流下载（只由一个块发起）
             CleanupFile(part);
-            CancelSiblings(e);
-            RequeueSingle(e);
+            if (!e->fallbackStarted.exchange(true)) {
+                e->rangeUnsupported.store(true);
+                CancelSiblings(e);
+                RequeueSingle(e);
+            }
             return;
         }
 
-        if (!job->ok) { CleanupFile(part); Fail(e, job->httpStatus, detail::Widen(job->error)); return; }
+        // 416 = 请求区间超出服务器真实大小（声明的大小偏大，或 CDN 上换了文件）。
+        // 当成普通失败重试只会一直 416，这里放弃分块、清掉错误大小，改单流从 0 重下。
+        if (job->httpStatus == 416) {
+            CleanupFile(part);
+            if (!e->fallbackStarted.exchange(true)) AbandonChunks(e);
+            return;
+        }
+
+        if (!job->ok) {
+            CleanupFile(part);
+            // 被回退 Cancel 掉的兄弟块不是真失败，别让它去走重试
+            if (e->fallbackStarted.load()) return;
+            Fail(e, job->httpStatus, detail::Widen(job->error));
+            return;
+        }
         if (sink->failed) { CleanupFile(part); Fail(e, job->httpStatus, L"disk write failed"); return; }
+
+        // 已经改单流了，这个块的下场数据没有意义
+        if (e->fallbackStarted.load()) { CleanupFile(part); return; }
 
         uint64_t got = job->bytesDone.load();
         e->finished.fetch_add(got);
@@ -397,6 +426,26 @@ struct Manager::Impl {
             for (auto& p : active) if (p.first.get() == e.get()) jobs.push_back(p.second);
         }
         for (auto& j : jobs) engine->Cancel(j);
+    }
+
+    // 分块拿到的 416 说明"声明的总大小"和服务器对不上：丢掉所有块，
+    // 清掉 expect（否则 Verify 会按错误大小判 size mismatch 删文件），改单流重下。
+    void AbandonChunks(const EntryPtr& e) {
+        uint64_t oldTotal = e->total;
+        CleanupPartsByTotal(e, oldTotal);
+        {
+            std::lock_guard<std::mutex> lk(e->mu);
+            if (e->state == TaskState::Completed || e->state == TaskState::Failed ||
+                e->state == TaskState::Cancelled) return;
+            e->expect = 0;
+            e->total = 0;
+            e->state = TaskState::Queued;
+        }
+        e->rangeUnsupported.store(true);
+        e->finished.store(0);
+        e->pending.store(0);
+        CancelSiblings(e);
+        RequeueSingle(e);
     }
 
     void RequeueSingle(const EntryPtr& e) {
@@ -434,14 +483,16 @@ struct Manager::Impl {
         return ok;
     }
 
-    void CleanupParts(const EntryPtr& e) {
+    void CleanupPartsByTotal(const EntryPtr& e, uint64_t total) {
         uint64_t cs = cfg.chunkSize ? cfg.chunkSize : (8ull << 20);
-        int n = e->total ? (int)((e->total + cs - 1) / cs) : 0;
+        int n = total ? (int)((total + cs - 1) / cs) : 0;
         for (int i = 0; i < n; ++i) {
             std::wstring part = e->path + L".part" + std::to_wstring(i);
             _wremove(part.c_str());
         }
     }
+
+    void CleanupParts(const EntryPtr& e) { CleanupPartsByTotal(e, e->total); }
 
     void CleanupFile(const std::wstring& p) { _wremove(p.c_str()); }
 
@@ -511,6 +562,7 @@ struct Manager::Impl {
                 e->finished.store(0);
                 e->pending.store(0);
                 e->rangeUnsupported.store(false);
+                e->fallbackStarted.store(false);
                 // 有镜像就换下一个源，换到末尾再绕回主源
                 if (!e->urls.empty()) {
                     e->urlIdx = (e->urlIdx + 1) % (int)e->urls.size();
@@ -726,3 +778,4 @@ void Manager::WaitIdle() { impl_->WaitIdle(); }
 void Manager::Shutdown() { impl_->Shutdown(); }
 
 } // namespace xgdl
+
