@@ -139,6 +139,8 @@ Bridge::Bridge(Sink sink, ThemeQuery theme, SettingsStore* settings)
       settings_(settings),
       bus_(std::make_shared<AsyncBus>()) {
     xgdl::Config cfg;
+    cfg.chunkSize = 512ull << 10;          // 分块粒度 512 KB
+    cfg.maxHostConnections = 128;          // 允许 128 个分块同时在飞
     if (settings_) {
         const Settings& s = settings_->Get();
         cfg.smallThreads = s.smallThreads > 0 ? s.smallThreads : 16;
