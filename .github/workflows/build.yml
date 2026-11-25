@@ -14,7 +14,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Show toolchain
-        run: cmake --version; & "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationVersion
+        run: |
+          cmake --version
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
 
       - name: Configure
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
