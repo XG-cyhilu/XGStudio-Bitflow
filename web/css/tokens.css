@@ -1,0 +1,151 @@
+:root {
+  color-scheme: light;
+
+  --font-family-base: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-family-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-family-mono: "Cascadia Mono", "Consolas", "Courier New", monospace;
+
+  --font-size-100: 10px;
+  --font-size-200: 12px;
+  --font-size-300: 14px;
+  --font-size-400: 16px;
+  --font-size-500: 20px;
+  --font-size-600: 24px;
+
+  --line-height-200: 16px;
+  --line-height-300: 20px;
+  --line-height-400: 22px;
+  --line-height-500: 28px;
+
+  --font-weight-regular: 400;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --border-radius-small: 2px;
+  --border-radius-medium: 4px;
+  --border-radius-large: 6px;
+  --border-radius-xlarge: 8px;
+  --border-radius-circular: 9999px;
+
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 16px;
+  --space-8: 20px;
+  --space-9: 24px;
+  --space-10: 32px;
+
+  --duration-fast: 0.1s;
+  --duration-normal: 0.2s;
+
+  --color-app-surface: #f3f3f3;
+  --color-app-surface-raised: #fafafa;
+
+  --color-neutral-foreground-1: #242424;
+  --color-neutral-foreground-2: #424242;
+  --color-neutral-foreground-3: #616161;
+  --color-neutral-foreground-4: #707070;
+  --color-neutral-foreground-disabled: #bdbdbd;
+  --color-neutral-foreground-on-brand: #ffffff;
+
+  --color-neutral-background-1: #ffffff;
+  --color-neutral-background-2: #fafafa;
+  --color-neutral-background-3: #f5f5f5;
+  --color-neutral-background-4: #f0f0f0;
+  --color-neutral-background-5: #ebebeb;
+  --color-neutral-background-6: #e6e6e6;
+
+  --color-neutral-background-1-hover: #fafafa;
+  --color-neutral-background-1-pressed: #f5f5f5;
+  --color-subtle-background-hover: #f5f5f5;
+  --color-subtle-background-pressed: #e8e8e8;
+
+  --color-neutral-stroke-1: #d6d6d6;
+  --color-neutral-stroke-2: #e5e5e5;
+  --color-neutral-stroke-3: #f0f0f0;
+  --color-neutral-stroke-accessible: #616161;
+
+  --color-brand-background: #0f6cbd;
+  --color-brand-background-hover: #115ea3;
+  --color-brand-background-pressed: #0c3b5e;
+  --color-brand-background-selected: #0f6cbd;
+  --color-brand-foreground-1: #0f6cbd;
+  --color-brand-foreground-2: #115ea3;
+  --color-brand-stroke-1: #0f6cbd;
+  --color-brand-background-subtle: #e9f2fb;
+
+  --color-palette-green-foreground-1: #0e700e;
+  --color-palette-green-background-1: #e8f5e8;
+  --color-palette-red-foreground-1: #b10e1c;
+  --color-palette-red-background-1: #fdeff0;
+  --color-palette-yellow-foreground-1: #7a6a00;
+  --color-palette-yellow-background-1: #fff8dc;
+  --color-palette-blue-foreground-1: #0f6cbd;
+
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 2px rgba(0, 0, 0, 0.06);
+  --shadow-4: 0 2px 4px rgba(0, 0, 0, 0.08), 0 0 2px rgba(0, 0, 0, 0.06);
+  --shadow-8: 0 4px 8px rgba(0, 0, 0, 0.1), 0 0 2px rgba(0, 0, 0, 0.06);
+  --shadow-16: 0 8px 16px rgba(0, 0, 0, 0.12), 0 0 2px rgba(0, 0, 0, 0.06);
+  --shadow-64: 0 24px 48px rgba(0, 0, 0, 0.18), 0 0 8px rgba(0, 0, 0, 0.08);
+
+  --overlay-backdrop: rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-app-surface: #202020;
+  --color-app-surface-raised: #272727;
+
+  --color-neutral-foreground-1: #ffffff;
+  --color-neutral-foreground-2: #d6d6d6;
+  --color-neutral-foreground-3: #adadad;
+  --color-neutral-foreground-4: #959595;
+  --color-neutral-foreground-disabled: #5c5c5c;
+  --color-neutral-foreground-on-brand: #ffffff;
+
+  --color-neutral-background-1: #272727;
+  --color-neutral-background-2: #232323;
+  --color-neutral-background-3: #2e2e2e;
+  --color-neutral-background-4: #333333;
+  --color-neutral-background-5: #383838;
+  --color-neutral-background-6: #3d3d3d;
+
+  --color-neutral-background-1-hover: #2e2e2e;
+  --color-neutral-background-1-pressed: #333333;
+  --color-subtle-background-hover: #2e2e2e;
+  --color-subtle-background-pressed: #363636;
+
+  --color-neutral-stroke-1: #3d3d3d;
+  --color-neutral-stroke-2: #333333;
+  --color-neutral-stroke-3: #2a2a2a;
+  --color-neutral-stroke-accessible: #adadad;
+
+  --color-brand-background: #0f6cbd;
+  --color-brand-background-hover: #2886de;
+  --color-brand-background-pressed: #0c3b5e;
+  --color-brand-background-selected: #0f6cbd;
+  --color-brand-foreground-1: #479ef5;
+  --color-brand-foreground-2: #62abf5;
+  --color-brand-stroke-1: #479ef5;
+  --color-brand-background-subtle: #1b2f42;
+
+  --color-palette-green-foreground-1: #54b054;
+  --color-palette-green-background-1: #1e2f1e;
+  --color-palette-red-foreground-1: #ff8080;
+  --color-palette-red-background-1: #3a1e1e;
+  --color-palette-yellow-foreground-1: #e0c94a;
+  --color-palette-yellow-background-1: #332d13;
+  --color-palette-blue-foreground-1: #479ef5;
+
+  --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 2px rgba(0, 0, 0, 0.3);
+  --shadow-4: 0 2px 4px rgba(0, 0, 0, 0.4), 0 0 2px rgba(0, 0, 0, 0.3);
+  --shadow-8: 0 4px 8px rgba(0, 0, 0, 0.45), 0 0 2px rgba(0, 0, 0, 0.3);
+  --shadow-16: 0 8px 16px rgba(0, 0, 0, 0.5), 0 0 2px rgba(0, 0, 0, 0.3);
+  --shadow-64: 0 24px 48px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.3);
+
+  --overlay-backdrop: rgba(0, 0, 0, 0.55);
+}
