@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <mutex>
 #include <thread>
@@ -200,13 +201,23 @@ Bridge::Bridge(Sink sink, ThemeQuery theme, SettingsStore* settings)
       pendingAdds_(std::make_shared<PendingAdds>()) {
     xgdl::Config cfg;
     cfg.chunkSize = 512ull << 10;          // 分块粒度 512 KB
-    cfg.maxHostConnections = 128;          // 允许 128 个分块同时在飞
+    cfg.idleTimeoutSec = 60;               // 单块在慢链路上可能几十秒才收到字节
     if (settings_) {
         const Settings& s = settings_->Get();
         cfg.smallThreads = s.smallThreads > 0 ? s.smallThreads : 16;
-        cfg.largeThreads = s.largeThreads > 0 ? s.largeThreads : 4;
-        cfg.maxConnections = s.maxConnections > 0 ? s.maxConnections : 48;
+        // 分块并发不是越大越好：同一主机几十路就已经把带宽/服务端连接配额吃满，
+        // 单块速度掉到几 KB/s 就会被空闲超时误判成失败（2026-11-25 的真实案例）。
+        int large = s.largeThreads > 0 ? s.largeThreads : 16;
+        if (large > 32) large = 32;
+        cfg.largeThreads = large;
+        cfg.maxHostConnections = large;
+        cfg.maxConnections = large + cfg.smallThreads;
+        if (s.maxConnections > 0) cfg.maxConnections = std::min(s.maxConnections, 64);
         cfg.maxSpeedBytesPerSec = s.speedLimitKb > 0 ? uint64_t(s.speedLimitKb) * 1024ull : 0ull;
+    } else {
+        cfg.largeThreads = 16;
+        cfg.maxHostConnections = 16;
+        cfg.maxConnections = 32;
     }
     mgr_ = std::make_unique<xgdl::Manager>(cfg);
 }

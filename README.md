@@ -104,7 +104,8 @@ Requirements: Visual Studio 2022 (MSVC x64), CMake ≥ 3.20, and the WebView2 Ru
 
 ## 已知边界 / Known limits
 
-- 分块是固定粒度：`Bridge` 里写死 512 KB/块、128 路分块并发（`maxHostConnections` 128），XGDL 本身没有"最小块大小 / 块数量"配置项；只有 `TaskOptions.expectBytes` 已知且大于 `largeThreshold` 时才会走分块路径。
+- 分块是固定粒度：`Bridge` 里写死 512 KB/块，分块并发默认 16、上限 32（`maxHostConnections` 跟随并发数，`maxConnections` 上限 64），XGDL 本身没有"最小块大小 / 块数量"配置项；只有 `TaskOptions.expectBytes` 已知且大于 `largeThreshold` 时才会走分块路径。
+- 分块并发不是越大越好：单主机几十路就足够吃满带宽，再多会把每条连接压到 KB/s 级、被 30/60 秒空闲超时误判成失败。现在单块遇到超时 / 断连 / 5xx 只重下这一块（退避重试 `maxRetries` 次），不会把整任务重排队。
 - "预计大小"留空时会先发一次 HEAD（失败再退化成 `Range: 0-0`）探真实长度，拿到大小才入队，所以大文件也能自动走分块。
 - 声明的大小和服务端对不上不会卡死：分块请求遇到 `416` 就丢掉所有分块、清掉错误大小、改单流从 0 重下；断点续传遇到 `416`（残件比真实文件长）会删残件重下。
 - 单任务暂停没有实现：XGDL 只有全局 `Pause()`，单任务只能 `Cancel()`。

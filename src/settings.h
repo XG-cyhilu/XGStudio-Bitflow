@@ -11,8 +11,8 @@
 struct Settings {
     std::string downloadDir;
     int smallThreads = 16;
-    int largeThreads = 128;
-    int maxConnections = 128;
+    int largeThreads = 16;
+    int maxConnections = 32;
     int speedLimitKb = 0;
     std::string logLevel = "debug";
     bool autoExtract = true;

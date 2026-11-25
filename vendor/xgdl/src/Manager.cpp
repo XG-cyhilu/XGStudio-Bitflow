@@ -266,6 +266,20 @@ struct Manager::Impl {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
+    // 传输层抖动（超时 / 被对端掐断 / 5xx）不算任务失败，退避后重下这一块
+    static bool Retryable(const std::string& err, long status) {
+        if (status >= 400 && status < 500 && status != 408 && status != 429) return false;  // 4xx 是确定错误
+        if (err == "cancelled") return false;
+        return true;
+    }
+
+    int MaxTries() const { return cfg.maxRetries > 0 ? cfg.maxRetries + 1 : 1; }
+
+    uint64_t BackoffMs(int attempt) const {
+        int base = cfg.retryDelayMs > 0 ? cfg.retryDelayMs : 1;
+        return (uint64_t)base * (uint64_t)(attempt + 1);
+    }
+
     void RunSmall(const EntryPtr& e) {
         if (e->cancel.load()) { FinishCancelled(e); return; }
         e->state = TaskState::Downloading;
@@ -278,63 +292,76 @@ struct Manager::Impl {
             e->url = url;
         }
 
-        // 断点续传：.part 已有字节就带着 Range 继续写
-        uint64_t resumeFrom = 0;
-        if (e->resume) {
-            uint64_t sz = 0;
-            if (detail::FileSize(part, sz) && sz > 0) {
-                if (e->expect && sz >= e->expect) { CleanupFile(part); sz = 0; }   // 已经下满却没合并成功 → 重下
-                resumeFrom = sz;
+        for (int attempt = 0; attempt < MaxTries(); ++attempt) {
+            if (e->cancel.load()) { CleanupFile(part); FinishCancelled(e); return; }
+
+            // 断点续传：.part 已有字节就带着 Range 继续写
+            uint64_t resumeFrom = 0;
+            if (e->resume) {
+                uint64_t sz = 0;
+                if (detail::FileSize(part, sz) && sz > 0) {
+                    if (e->expect && sz >= e->expect) { CleanupFile(part); sz = 0; }   // 已经下满却没合并成功 → 重下
+                    resumeFrom = sz;
+                }
             }
-        }
 
-        auto sink = std::make_shared<detail::Sink>();
-        sink->path = part;
-        sink->maxQueueBytes = cfg.ringBytes;
-        sink->append = resumeFrom > 0;
-        std::string err;
-        if (!detail::EnsureParentDir(part, err)) { Fail(e, 0, detail::Widen(err)); return; }
+            auto sink = std::make_shared<detail::Sink>();
+            sink->path = part;
+            sink->maxQueueBytes = cfg.ringBytes;
+            sink->append = resumeFrom > 0;
+            std::string err;
+            if (!detail::EnsureParentDir(part, err)) { Fail(e, 0, detail::Widen(err)); return; }
 
-        auto job = engine->Submit(url, sink, resumeFrom, 0, e->headers);
-        Track(e, job);
-        Await(job);
-        Untrack(job);
-        WaitSinkClosed(sink);
+            auto job = engine->Submit(url, sink, resumeFrom, 0, e->headers);
+            Track(e, job);
+            Await(job);
+            Untrack(job);
+            WaitSinkClosed(sink);
 
-        if (e->cancel.load()) { CleanupFile(part); FinishCancelled(e); return; }
+            if (e->cancel.load()) { CleanupFile(part); FinishCancelled(e); return; }
 
-        // 服务器忽略了 Range（返回 200 而不是 206）：刚写进去的数据是整段内容，接在旧尾巴上就废了
-        if (job->ok && resumeFrom > 0 && job->httpStatus == 200) {
-            CleanupFile(part);
-            RequeueSingle(e);
+            // 服务器忽略了 Range（返回 200 而不是 206）：刚写进去的数据是整段内容，接在旧尾巴上就废了
+            if (job->ok && resumeFrom > 0 && job->httpStatus == 200) {
+                CleanupFile(part);
+                RequeueSingle(e);
+                return;
+            }
+
+            // 断点续传的起点被服务器判为越界（.part 比真实文件还长）：丢掉残件从头下
+            if (!job->ok && job->httpStatus == 416 && resumeFrom > 0) {
+                CleanupFile(part);
+                RequeueSingle(e);
+                return;
+            }
+
+            if (!job->ok) {
+                if (job->error == "cancelled") { CleanupFile(part); return; }
+                if (Retryable(job->error, job->httpStatus) && attempt + 1 < MaxTries()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(BackoffMs(attempt)));
+                    continue;
+                }
+                Fail(e, job->httpStatus, detail::Widen(job->error));
+                return;
+            }
+            if (sink->failed) { CleanupFile(part); Fail(e, job->httpStatus, L"disk write failed"); return; }
+
+            e->finished.store(resumeFrom + job->bytesDone.load());
+            if (job->contentLength && resumeFrom > 0)
+                e->total = resumeFrom + job->contentLength;
+            else if (job->contentLength)
+                e->total = job->contentLength;
+
+            if (!Verify(e, part)) return;
+
+            std::string mvErr;
+            if (!detail::MoveReplace(part, e->path, mvErr)) {
+                Fail(e, job->httpStatus, L"rename failed: " + detail::Widen(mvErr));
+                return;
+            }
+            detail::SetFileMtime(e->path, e->mtimeMs);
+            Complete(e);
             return;
         }
-
-        // 断点续传的起点被服务器判为越界（.part 比真实文件还长）：丢掉残件从头下
-        if (!job->ok && job->httpStatus == 416 && resumeFrom > 0) {
-            CleanupFile(part);
-            RequeueSingle(e);
-            return;
-        }
-
-        if (!job->ok) { Fail(e, job->httpStatus, detail::Widen(job->error)); return; }
-        if (sink->failed) { CleanupFile(part); Fail(e, job->httpStatus, L"disk write failed"); return; }
-
-        e->finished.store(resumeFrom + job->bytesDone.load());
-        if (job->contentLength && resumeFrom > 0)
-            e->total = resumeFrom + job->contentLength;
-        else if (job->contentLength)
-            e->total = job->contentLength;
-
-        if (!Verify(e, part)) return;
-
-        std::string mvErr;
-        if (!detail::MoveReplace(part, e->path, mvErr)) {
-            Fail(e, job->httpStatus, L"rename failed: " + detail::Widen(mvErr));
-            return;
-        }
-        detail::SetFileMtime(e->path, e->mtimeMs);
-        Complete(e);
     }
 
     void RunChunk(const Work& w) {
@@ -346,77 +373,89 @@ struct Manager::Impl {
         e->state = TaskState::Downloading;
         std::wstring part = e->path + L".part" + std::to_wstring(w.chunk);
 
-        std::wstring url;
-        {
-            std::lock_guard<std::mutex> lk(e->mu);
-            if (e->urlIdx < 0 || e->urlIdx >= (int)e->urls.size()) e->urlIdx = 0;
-            url = e->urls.empty() ? e->url : e->urls[e->urlIdx];
-            e->url = url;
-        }
+        for (int attempt = 0; attempt < MaxTries(); ++attempt) {
+            if (e->cancel.load()) { CleanupFile(part); FinishCancelled(e); return; }
+            if (e->fallbackStarted.load()) { CleanupFile(part); return; }
 
-        auto sink = std::make_shared<detail::Sink>();
-        sink->path = part;
-        sink->maxQueueBytes = cfg.ringBytes;
-        std::string err;
-        if (!detail::EnsureParentDir(part, err)) { Fail(e, 0, detail::Widen(err)); return; }
-
-        auto job = engine->Submit(url, sink, w.start, w.end, e->headers);
-        Track(e, job);
-        Await(job);
-        Untrack(job);
-        WaitSinkClosed(sink);
-
-        if (e->cancel.load()) { CleanupFile(part); FinishCancelled(e); return; }
-
-        if (job->ok && w.chunk > 0 && job->httpStatus == 200) {
-            // 服务器忽略了 Range，回退到单流下载（只由一个块发起）
-            CleanupFile(part);
-            if (!e->fallbackStarted.exchange(true)) {
-                e->rangeUnsupported.store(true);
-                CancelSiblings(e);
-                RequeueSingle(e);
+            std::wstring url;
+            {
+                std::lock_guard<std::mutex> lk(e->mu);
+                if (e->urlIdx < 0 || e->urlIdx >= (int)e->urls.size()) e->urlIdx = 0;
+                url = e->urls.empty() ? e->url : e->urls[e->urlIdx];
+                e->url = url;
             }
+
+            auto sink = std::make_shared<detail::Sink>();
+            sink->path = part;
+            sink->maxQueueBytes = cfg.ringBytes;
+            std::string err;
+            if (!detail::EnsureParentDir(part, err)) { Fail(e, 0, detail::Widen(err)); return; }
+
+            auto job = engine->Submit(url, sink, w.start, w.end, e->headers);
+            Track(e, job);
+            Await(job);
+            Untrack(job);
+            WaitSinkClosed(sink);
+
+            if (e->cancel.load()) { CleanupFile(part); FinishCancelled(e); return; }
+
+            if (job->ok && w.chunk > 0 && job->httpStatus == 200) {
+                // 服务器忽略了 Range，回退到单流下载（只由一个块发起）
+                CleanupFile(part);
+                if (!e->fallbackStarted.exchange(true)) {
+                    e->rangeUnsupported.store(true);
+                    CancelSiblings(e);
+                    RequeueSingle(e);
+                }
+                return;
+            }
+
+            // 416 = 请求区间超出服务器真实大小（声明的大小偏大，或 CDN 上换了文件）。
+            // 当成普通失败重试只会一直 416，这里放弃分块、清掉错误大小，改单流从 0 重下。
+            if (job->httpStatus == 416) {
+                CleanupFile(part);
+                if (!e->fallbackStarted.exchange(true)) AbandonChunks(e);
+                return;
+            }
+
+            if (!job->ok) {
+                CleanupFile(part);
+                // 被回退/重试 Cancel 掉的兄弟块不是真失败
+                if (e->fallbackStarted.load()) return;
+                if (job->error == "cancelled") return;
+                // 只重下这一块：整任务重排队会把已经下好的块全部作废
+                if (Retryable(job->error, job->httpStatus) && attempt + 1 < MaxTries()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(BackoffMs(attempt)));
+                    continue;
+                }
+                Fail(e, job->httpStatus, detail::Widen(job->error));
+                return;
+            }
+            if (sink->failed) { CleanupFile(part); Fail(e, job->httpStatus, L"disk write failed"); return; }
+
+            // 已经改单流了，这个块的下场数据没有意义
+            if (e->fallbackStarted.load()) { CleanupFile(part); return; }
+
+            uint64_t got = job->bytesDone.load();
+            e->finished.fetch_add(got);
+            if (e->pending.fetch_sub(1) != 1) return;   // 还有分块没完
+
+            // 最后一块：合并到 .part、校验、再改名成正式文件
+            e->state = TaskState::Verifying;
+            std::wstring merged = PartPath(e);
+            if (!MergeChunks(e, merged)) { CleanupParts(e); CleanupFile(merged); Fail(e, 0, L"merge failed"); return; }
+            CleanupParts(e);
+            if (!Verify(e, merged)) { CleanupFile(merged); return; }
+            std::string mvErr;
+            if (!detail::MoveReplace(merged, e->path, mvErr)) {
+                CleanupFile(merged);
+                Fail(e, 0, L"rename failed: " + detail::Widen(mvErr));
+                return;
+            }
+            detail::SetFileMtime(e->path, e->mtimeMs);
+            Complete(e);
             return;
         }
-
-        // 416 = 请求区间超出服务器真实大小（声明的大小偏大，或 CDN 上换了文件）。
-        // 当成普通失败重试只会一直 416，这里放弃分块、清掉错误大小，改单流从 0 重下。
-        if (job->httpStatus == 416) {
-            CleanupFile(part);
-            if (!e->fallbackStarted.exchange(true)) AbandonChunks(e);
-            return;
-        }
-
-        if (!job->ok) {
-            CleanupFile(part);
-            // 被回退 Cancel 掉的兄弟块不是真失败，别让它去走重试
-            if (e->fallbackStarted.load()) return;
-            Fail(e, job->httpStatus, detail::Widen(job->error));
-            return;
-        }
-        if (sink->failed) { CleanupFile(part); Fail(e, job->httpStatus, L"disk write failed"); return; }
-
-        // 已经改单流了，这个块的下场数据没有意义
-        if (e->fallbackStarted.load()) { CleanupFile(part); return; }
-
-        uint64_t got = job->bytesDone.load();
-        e->finished.fetch_add(got);
-        if (e->pending.fetch_sub(1) != 1) return;   // 还有分块没完
-
-        // 最后一块：合并到 .part、校验、再改名成正式文件
-        e->state = TaskState::Verifying;
-        std::wstring merged = PartPath(e);
-        if (!MergeChunks(e, merged)) { CleanupParts(e); CleanupFile(merged); Fail(e, 0, L"merge failed"); return; }
-        CleanupParts(e);
-        if (!Verify(e, merged)) { CleanupFile(merged); return; }
-        std::string mvErr;
-        if (!detail::MoveReplace(merged, e->path, mvErr)) {
-            CleanupFile(merged);
-            Fail(e, 0, L"rename failed: " + detail::Widen(mvErr));
-            return;
-        }
-        detail::SetFileMtime(e->path, e->mtimeMs);
-        Complete(e);
     }
 
     void CancelSiblings(const EntryPtr& e) {
