@@ -11,8 +11,7 @@
     paused: false,
     info: {},
     settings: null,
-    counts: { all: 0, active: 0, completed: 0, failed: 0 },
-    logLines: 0
+    counts: { all: 0, active: 0, completed: 0, failed: 0 }
   };
 
   var listEl = document.getElementById('list');
@@ -23,7 +22,8 @@
   var errEl = document.getElementById('dialog-error');
   var btnPause = document.getElementById('btn-pause');
   var btnResume = document.getElementById('btn-resume');
-  var logListEl = document.getElementById('log-list');
+  var termEl = document.getElementById('term-output');
+  var termInput = document.getElementById('term-input');
   var probeEl = document.getElementById('probe-result');
   var hintEl = document.getElementById('settings-hint');
 
@@ -215,45 +215,96 @@
     });
   }
 
-  function appendLogs(records) {
+  function termAtBottom() {
+    return termEl.scrollTop + termEl.clientHeight >= termEl.scrollHeight - 24;
+  }
+
+  function termScrollBottom() {
+    termEl.scrollTop = termEl.scrollHeight;
+  }
+
+  function appendTerm(kind, text, level) {
+    var stick = termAtBottom();
+    var row = document.createElement('div');
+    row.className = 'term-line';
+    row.dataset.kind = kind || 'out';
+    if (level) row.dataset.level = level;
+    row.textContent = text;
+    termEl.appendChild(row);
+    while (termEl.children.length > 1200) termEl.removeChild(termEl.firstChild);
+    if (stick) termScrollBottom();
+    return row;
+  }
+
+  function appendLogRecords(records) {
     if (!records || !records.length) return;
-    var nearBottom = logListEl.scrollTop + logListEl.clientHeight >= logListEl.scrollHeight - 24;
-    var empty = logListEl.querySelector('.log-empty');
-    if (empty) empty.remove();
-
     records.forEach(function (rec) {
-      var row = document.createElement('div');
-      row.className = 'log-line';
-      row.dataset.level = rec.level || 'info';
-
-      var time = document.createElement('span');
-      time.className = 'log-time';
       var date = new Date(rec.time || Date.now());
-      time.textContent = String(date.getHours()).padStart(2, '0') + ':' +
+      var stamp = String(date.getHours()).padStart(2, '0') + ':' +
         String(date.getMinutes()).padStart(2, '0') + ':' +
         String(date.getSeconds()).padStart(2, '0');
-
-      var level = document.createElement('span');
-      level.className = 'log-level';
-      level.textContent = String(rec.level || 'info').slice(0, 5);
-
-      var text = document.createElement('span');
-      text.className = 'log-text';
-      text.textContent = rec.text || '';
-
-      row.appendChild(time);
-      row.appendChild(level);
-      row.appendChild(text);
-      logListEl.appendChild(row);
+      var level = String(rec.level || 'info');
+      appendTerm('log', stamp + '  ' + level.toUpperCase().padEnd(5, ' ') + ' ' + (rec.text || ''), level);
     });
+  }
 
-    view.logLines += records.length;
-    while (logListEl.children.length > 800) logListEl.removeChild(logListEl.firstChild);
-    document.getElementById('log-count').textContent = view.logLines + ' 条';
-    if (nearBottom) logListEl.scrollTop = logListEl.scrollHeight;
+  var history = [];
+  var historyIndex = 0;
+
+  function runCommand(line) {
+    var text = String(line || '').trim();
+    if (!text) return;
+    appendTerm('echo', '❯ ' + text);
+    if (text.toLowerCase() === 'clear' || text.toLowerCase() === 'cls') {
+      termEl.innerHTML = '';
+      return;
+    }
+    history.push(text);
+    historyIndex = history.length;
+    call('term.exec', { line: text })
+      .catch(function (error) {
+        appendTerm('err', error.message);
+      });
+  }
+
+  function onTermKey(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      runCommand(termInput.value);
+      termInput.value = '';
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      if (!history.length) return;
+      event.preventDefault();
+      historyIndex = Math.max(0, historyIndex - 1);
+      termInput.value = history[historyIndex] || '';
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      if (!history.length) return;
+      event.preventDefault();
+      historyIndex = Math.min(history.length, historyIndex + 1);
+      termInput.value = historyIndex >= history.length ? '' : history[historyIndex];
+      return;
+    }
+    if (event.key === 'l' && event.ctrlKey) {
+      event.preventDefault();
+      termEl.innerHTML = '';
+    }
   }
 
   function handleAsync(msg) {
+    if (msg.type === 'term') {
+      (msg.lines || []).forEach(function (item) {
+        if (item.kind === 'clear') {
+          termEl.innerHTML = '';
+          return;
+        }
+        appendTerm(item.kind || 'out', item.text || '');
+      });
+      return;
+    }
     if (msg.type === 'verify') {
       hashes.set(msg.task, { algo: msg.algo || 'sha256', hex: msg.hex || '', ok: msg.ok });
       var el = rows.get(msg.task);
@@ -336,7 +387,7 @@
       });
     }
 
-    if (msg.logs) appendLogs(msg.logs);
+    if (msg.logs) appendLogRecords(msg.logs);
     if (msg.async) msg.async.forEach(handleAsync);
 
     refreshNav();
@@ -362,7 +413,10 @@
       node.hidden = node.dataset.view !== screen;
     });
     if (screen === 'settings') loadSettings();
-    if (screen === 'logs') logListEl.scrollTop = logListEl.scrollHeight;
+    if (screen === 'term') {
+      termScrollBottom();
+      termInput.focus();
+    }
     refreshNav();
   }
 
@@ -547,9 +601,7 @@
     });
 
     document.getElementById('btn-clear-log').addEventListener('click', function () {
-      logListEl.innerHTML = '<div class="log-empty">视图已清空，新日志会继续追加。</div>';
-      view.logLines = 0;
-      document.getElementById('log-count').textContent = '0 条';
+      termEl.innerHTML = '';
     });
 
     document.getElementById('btn-open-logdir').addEventListener('click', function () {
@@ -567,10 +619,23 @@
       errEl.hidden = true;
     });
 
+    termInput.addEventListener('keydown', onTermKey);
+    document.getElementById('term-input-row').addEventListener('click', function () {
+      termInput.focus();
+    });
+    termEl.addEventListener('click', function () {
+      if (!window.getSelection().toString()) termInput.focus();
+    });
+
     document.addEventListener('keydown', function (event) {
+      if (termInput === document.activeElement) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') {
         event.preventDefault();
         if (!dialog.open) openDialog();
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'l' && view.screen === 'term') {
+        event.preventDefault();
+        termEl.innerHTML = '';
       }
       if (event.key === 'Escape' && dialog.open) dialog.close();
     });
@@ -578,6 +643,9 @@
 
   function boot() {
     bindUi();
+
+    appendTerm('banner', 'BitFlow terminal · xgcfg / xgcrypto / xgfs / xglog / xgnet / xgproc / xgsecure / xgzip');
+    appendTerm('info', '输入 help 查看命令，↑↓ 翻历史，Ctrl+L 清屏。');
 
     window.Bitflow.on(function (msg) {
       if (msg.type === 'tick') renderTick(msg);

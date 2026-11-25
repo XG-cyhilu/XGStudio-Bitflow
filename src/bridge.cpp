@@ -20,6 +20,7 @@
 
 #include "json.h"
 #include "settings.h"
+#include "terminal.h"
 #include "text.h"
 
 struct AsyncBus {
@@ -558,6 +559,33 @@ std::string Bridge::Handle(const std::string& payload) {
         StartExtract(id, path);
         jsn::Writer d;
         d.BeginObject().EndObject();
+        return MakeReply(rid, true, d.Str(), "");
+    }
+
+    if (cmd == "term.exec") {
+        std::string line = root.Get("line") ? root.Get("line")->AsStr() : std::string();
+        if (line.empty()) return MakeReply(rid, false, "", "缺少命令");
+        std::shared_ptr<AsyncBus> bus = bus_;
+        std::thread([bus, line] {
+            std::vector<term::Line> lines = term::Run(line);
+            jsn::Writer w;
+            w.BeginObject();
+            w.Key("type").Str("term");
+            w.Key("lines").BeginArray();
+            for (const term::Line& l : lines) {
+                w.BeginObject();
+                w.Key("kind").Str(l.kind);
+                w.Key("text").Str(l.text);
+                w.EndObject();
+            }
+            w.EndArray();
+            w.EndObject();
+            bus->Push(w.Str());
+        }).detach();
+        jsn::Writer d;
+        d.BeginObject();
+        d.Key("queued").Bool(true);
+        d.EndObject();
         return MakeReply(rid, true, d.Str(), "");
     }
 

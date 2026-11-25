@@ -16,7 +16,7 @@ A high-speed, multi-functional downloader developed by XG STUDIO: a VanillaJS fr
 - 任务完成后自动计算 SHA-256（`xgcrypto`），行内显示 hash chip，点开即完整值
 - `.zip` 完成后可自动解压到同名目录，也可手动触发（`xgzip`）
 - 设置页写入 `settings.json`（`xgcfg` 点路径 + 原子写）：下载目录、线程 / 连接数 / 限速、日志级别、自动解压、测速地址
-- 运行日志页实时滚动（`xglog` 环形缓冲 + `UiPoll`），同时落盘到 `logs/bitflow.log`
+- 内置终端：一个真能跑命令的输入行，直接调用 core 模块（`ls`/`df`/`hash`/`zip`/`net`/`run`/`cfg`/`secure`/`log`），`help` 看全部命令；日志流与命令输出在同一个视图里滚动
 - 网络测速（`xgnet`）：状态码、耗时、吞吐；超时未读完时按已收字节给出估算
 - 打开所在文件夹 / 定位文件走 `xgproc`，写入与目录创建走 `xgfs`，安装 ID 由 `xgsecure` 生成
 
@@ -28,6 +28,7 @@ cmake/embed_web_assets.cmake 把 web/ 打成 RCDATA 资源，生成资源表
 src/main.cpp                 Win32 窗口 + WebView2 宿主 + 主题/DPI + 资源服务
 src/bridge.h/.cpp            JS ↔ C++ 命令桥（JSON 协议，XGDL 轮询转推送）
 src/settings.h/.cpp          设置结构、加载/保存、应用数据目录
+src/terminal.h/.cpp          内置终端：命令解析 + core 模块调用
 src/json.h                   极简 JSON 解析 / 序列化
 src/text.h                   UTF-8 ↔ UTF-16 转换
 web/                         前端源码（index.html / css / js，Fluent 2 令牌）
@@ -45,7 +46,7 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release --parallel
 ```
 
-产物：`build/Release/Bitflow.exe`（约 1.0 MB，前端资源与全部静态库都已在里面，单文件即可运行）。
+产物：`build/Release/Bitflow.exe`（约 1.06 MB，前端资源与全部静态库都已在里面，单文件即可运行）。
 
 Requirements: Visual Studio 2022 (MSVC x64), CMake ≥ 3.20, and the WebView2 Runtime (preinstalled on most Windows 10/11). The output is a single self-contained `Bitflow.exe`; front-end assets are embedded as RCDATA.
 
@@ -74,13 +75,32 @@ Requirements: Visual Studio 2022 (MSVC x64), CMake ≥ 3.20, and the WebView2 Ru
 | `engine.pause` / `engine.resume` | — | 暂停派发 / 恢复 |
 | `task.verify` | `task` | 重新计算 SHA-256 |
 | `task.extract` | `task` | 解压该任务落盘的 zip |
+| `term.exec` | `line` | 执行一行终端命令，结果异步按 `term` 推回 |
 | `net.probe` | `url`（可省略，用设置里的地址） | 测速，结果异步回推 |
 | `shell.reveal` | `path` | 资源管理器定位文件 |
 | `shell.openUrl` | `url` | 系统浏览器打开 |
 | `log.revealDir` | — | 打开日志目录 |
 
 上行（宿主 → 页面）：`reply`（命令应答）、`tick`（`progress` + `items` + `events` + `logs` + `async`）、`theme`。
-`async` 元素类型：`verify`（`task`/`algo`/`hex`/`ok`）、`extract`（`task`/`ok`/`dest`/`files`/`bytes`/`ms`/`error`）、`probe`（`ok`/`partial`/`status`/`ms`/`speed`/`received`/`error`）。
+`async` 元素类型：`verify`（`task`/`algo`/`hex`/`ok`）、`extract`（`task`/`ok`/`dest`/`files`/`bytes`/`ms`/`error`）、`probe`（`ok`/`partial`/`status`/`ms`/`speed`/`received`/`error`）、`term`（`lines[]`，每项 `kind` 为 `out` / `err` / `info` / `echo` / `clear`）。
+
+## 终端命令 / Terminal commands
+
+终端不是装饰：输入行把整行交给 `term.exec`，宿主在后台线程里调 `term::Run`，再以 `term` 异步回推。当前目录初始为设置的下载目录。
+
+| 命令 | 走哪个模块 |
+|---|---|
+| `help`、`clear`、`echo`、`pwd`、`cd` | 终端自身 |
+| `ls [path] [-r]` | `xgfs::ListDir` |
+| `stat <path>` / `df [path]` | `xgfs::Size`/`ModifiedTime`/`DiskSpace` |
+| `mkdir` / `rm [-r]` / `cp` / `mv` | `xgfs::EnsureDir`/`RemoveWithRetry`/`Copy`/`Move` |
+| `hash <md5\|sha1\|sha256\|sha384\|sha512> <path>` | `xgcrypto::HashFileHex` |
+| `zip list <zip>` / `zip extract <zip> [dir]` | `xgzip::List` / `xgzip::Extract` |
+| `net probe <url>` / `net get <url> [file]` | `xgnet::Client` |
+| `run <command line>` | `xgproc::Run`（收集 stdout/stderr，最多显示 80 行） |
+| `cfg dump` / `cfg get <k>` / `cfg set <k> <v>` | `xgcfg`（写的就是 `settings.json`，重启生效） |
+| `secure rand <n>` / `hmac <k> <text>` / `b64` / `b64d` | `xgsecure` |
+| `log level <lvl>` / `log dir` | `xglog` |
 
 ## 已知边界 / Known limits
 

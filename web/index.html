@@ -47,9 +47,9 @@
     <div class="nav-divider"></div>
 
     <div class="nav-list">
-      <button class="nav-item" data-view="logs">
-        <span class="nav-icon"><svg viewBox="0 0 20 20" fill="none"><path d="M4 4.5h12M4 9h12M4 13.5h8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span>
-        <span class="nav-text">运行日志</span>
+      <button class="nav-item" data-view="term">
+        <span class="nav-icon"><svg viewBox="0 0 20 20" fill="none"><rect x="3" y="4.5" width="14" height="11" rx="1.6" stroke="currentColor" stroke-width="1.2"/><path d="m6.4 8.4 2 1.8-2 1.8M10.4 12.2h3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span>
+        <span class="nav-text">终端</span>
       </button>
       <button class="nav-item" data-view="settings">
         <span class="nav-icon"><svg viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="2.6" stroke="currentColor" stroke-width="1.2"/><path d="M10 3.2v1.6M10 15.2v1.6M3.2 10h1.6M15.2 10h1.6M5.2 5.2l1.1 1.1M13.7 13.7l1.1 1.1M14.8 5.2l-1.1 1.1M6.3 13.7l-1.1 1.1" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg></span>
@@ -106,18 +106,23 @@
       </div>
     </section>
 
-    <section class="view" data-view="logs" id="view-logs" hidden>
+    <section class="view" data-view="term" id="view-term" hidden>
       <header class="commandbar">
         <div class="cmd-group">
-          <h1 class="view-title">运行日志</h1>
-          <span class="view-sub" id="log-count">0 条</span>
+          <h1 class="view-title">终端</h1>
+          <span class="view-sub" id="term-status">内置 C++ core · 输入 help 查看命令</span>
         </div>
         <div class="cmd-group">
-          <button class="btn btn-ghost" id="btn-clear-log">清空视图</button>
+          <button class="btn btn-ghost" id="btn-clear-log">清屏</button>
           <button class="btn" id="btn-open-logdir">打开日志目录</button>
         </div>
       </header>
-      <div class="log-list" id="log-list"><div class="log-empty">暂无日志，运行任务后会在这里滚动输出。</div></div>
+      <div class="log-list term-output" id="term-output"></div>
+      <div class="term-input-row" id="term-input-row">
+        <span class="term-prompt">❯</span>
+        <input class="term-input" id="term-input" type="text" spellcheck="false" autocomplete="off"
+               aria-label="终端命令">
+      </div>
     </section>
 
     <section class="view" data-view="settings" id="view-settings" hidden>
