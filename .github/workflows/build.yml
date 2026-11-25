@@ -8,9 +8,13 @@ on:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    # windows-latest 已经漂到没有 VS 2022 的镜像，CMake 找不到生成器；锁死 2022 镜像
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: cmake --version; & "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationVersion
 
       - name: Configure
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
