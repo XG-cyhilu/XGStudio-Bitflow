@@ -682,6 +682,17 @@ struct Manager::Impl {
         return true;
     }
 
+    // 已下字节 = 已收尾的块 + 每个在飞块当前收到的字节。
+    // 只算 e->finished 的话，分块下载时进度会按 512 KB 一格一格跳。
+    uint64_t DoneBytes(const EntryPtr& e) {
+        uint64_t done = e->finished.load();
+        std::lock_guard<std::mutex> lk(actMu);
+        for (auto& a : active) {
+            if (a.first.get() == e.get()) done += a.second->bytesDone.load();
+        }
+        return done;
+    }
+
     bool Query(uint32_t id, TaskInfo& out) {
         auto e = Find(id);
         if (!e) return false;
@@ -689,7 +700,7 @@ struct Manager::Impl {
         out.url = e->url;
         out.path = e->path;
         out.sizeTotal = e->total ? e->total : e->expect;
-        out.sizeDone = e->finished.load();
+        out.sizeDone = DoneBytes(e);
         out.state = e->state;
         out.priority = e->prio;
         out.attempt = e->attempt;
